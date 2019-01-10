@@ -1,0 +1,6 @@
+osx_instance:
+  image: mojave-xcode-10.1
+
+task:
+  name: Install GHC
+  script: python3 --version
