@@ -5,4 +5,4 @@ task:
   name: Install GHC
   update_python_script: brew install python@3
   install_ghc_script: curl -sL https://haskell.futurice.com/haskell-on-macos.py | python3 - --make-dirs --paths.d --ghc-alias=8.4.4 --cabal-alias=2.4.1.0 install ghc-8.4.4 cabal-install-2.4.1.0
-  check_cabal_version_script: cabal --version
+  check_cabal_version_script: reset && cabal --version
