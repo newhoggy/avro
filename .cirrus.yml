@@ -3,4 +3,4 @@ osx_instance:
 
 task:
   name: Install GHC
-  script: python3 --version
+  script: brew --version
