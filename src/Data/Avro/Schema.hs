@@ -121,8 +121,7 @@ data Type
              , symbols      :: [Text]
              , symbolLookup :: Int64 -> Maybe Text
              }
-      | Union { options     :: NonEmpty Type
-              , unionLookup :: Int64 -> Maybe Type
+      | Union { options     :: V.Vector Type
               }
       | Fixed { name    :: TypeName
               , aliases :: [TypeName]
@@ -148,7 +147,7 @@ instance Eq Type where
     and [name1 == name2, fs1 == fs2]
   Enum name1 _ _ s _ == Enum name2 _ _ s2 _ =
     and [name1 == name2, s == s2]
-  Union a _ == Union b _ = a == b
+  Union a == Union b = a == b
   Fixed name1 _ s == Fixed name2 _ s2 =
     and [name1 == name2, s == s2]
 
@@ -172,8 +171,7 @@ mkEnum name aliases doc symbols = Enum name aliases doc symbols lookup
 -- invalid Avro to include another union or to have more than one of the same
 -- type as a direct member of the union.  No check is done for this condition!
 mkUnion :: NonEmpty Type -> Type
-mkUnion os = Union os (\i -> IM.lookup (fromIntegral i) mp)
- where mp = IM.fromList (zip [0..] $ NE.toList os)
+mkUnion  = Union . V.fromList . NE.toList
 
 -- | A named type in Avro has a name and, optionally, a namespace.
 --
@@ -299,7 +297,7 @@ typeName bt =
     Array _        -> "array"
     Map   _        -> "map"
     NamedType name -> renderFullname name
-    Union (x:|_) _ -> typeName x
+    Union ts       -> typeName (V.head ts)
     _              -> renderFullname $ name bt
 
 data Field = Field { fldName    :: Text
@@ -340,7 +338,7 @@ parseSchemaJSON context = \case
     somename  -> return $ NamedType $ mkTypeName context somename Nothing
   A.Array arr
     | V.length arr > 0 ->
-      mkUnion . NE.fromList <$> mapM (parseSchemaJSON context) (V.toList arr)
+      Union <$> V.mapM (parseSchemaJSON context) arr
     | otherwise        -> fail "Unions must have at least one type."
   A.Object o -> do
     logicalType :: Maybe Text <- o .:? "logicalType"
@@ -570,8 +568,8 @@ parseFieldDefault :: (TypeName -> Maybe Type)
                      -- ^ JSON encoding of an Avro value.
                   -> Result (Ty.Value Schema)
 parseFieldDefault env schema value = parseAvroJSON defaultUnion env schema value
-  where defaultUnion (Union ts@(t :| _) _) val = Ty.Union ts t <$> parseFieldDefault env t val
-        defaultUnion _ _                       = error "Impossible: not Union."
+  where defaultUnion (Union ts) val = Ty.Union ts (V.head ts) <$> parseFieldDefault env (V.head ts) val
+        defaultUnion _ _            = error "Impossible: not Union."
 
 -- | Parse JSON-encoded avro data.
 parseAvroJSON :: (Type -> A.Value -> Result (Ty.Value Type))
@@ -723,7 +721,7 @@ matches a@Record{} b@Record{}       =
       , and $ zipWith fieldMatches (fields a) (fields b)
       ]
   where fieldMatches = matches `on` fldType
-matches a@Union{} b@Union{}         = and $ NE.zipWith matches (options a) (options b)
+matches a@Union{} b@Union{}         = and $ V.zipWith matches (options a) (options b)
 matches t1 t2                       = t1 == t2
 
 -- | @extractBindings schema@ traverses a schema and builds a map of all declared
@@ -737,7 +735,7 @@ extractBindings = \case
     let withRecord = HashMap.fromList $ (name : aliases) `zip` repeat t
     in HashMap.unions $ withRecord : (extractBindings . fldType <$> fields)
   e@Enum{..}   -> HashMap.fromList $ (name : aliases) `zip` repeat e
-  Union{..}    -> HashMap.unions $ NE.toList $ extractBindings <$> options
+  Union{..}    -> HashMap.unions $ V.toList $ extractBindings <$> options
   f@Fixed{..}  -> HashMap.fromList $ (name : aliases) `zip` repeat f
   Array{..}    -> extractBindings item
   Map{..}      -> extractBindings values
@@ -753,7 +751,7 @@ expandNamedTypes =
       t@(NamedType n)   -> fromMaybe t <$> gets (HashMap.lookup n)
       a@Array{item}     -> (\x -> a { item = x })   <$> go item
       m@Map{values}     -> (\x -> m { values = x }) <$> go values
-      u@Union{options}  -> mkUnion <$> traverse go options
+      u@Union{options}  -> Union <$> traverse go options
 
       r@Record{name, fields}  -> do
         fields' <- traverse expandField fields
@@ -772,7 +770,7 @@ overlay input supplement = overlayType input
     overlayType  a@Array{..}      = a { item    = overlayType item }
     overlayType  m@Map{..}        = m { values  = overlayType values }
     overlayType  r@Record{..}     = r { fields  = map overlayField fields }
-    overlayType  u@Union{..}      = mkUnion (NE.map overlayType options)
+    overlayType  u@Union{..}      = Union (V.map overlayType options)
     overlayType  nt@(NamedType _) = rebind nt
     overlayType  other            = other
 
